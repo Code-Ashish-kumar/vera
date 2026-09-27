@@ -16,6 +16,16 @@ That's it!
 Author: magicpin AI Challenge Team
 """
 
+# --- Load .env before the config block so env vars are available ---
+import os as _os
+from pathlib import Path as _Path
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(_Path(__file__).parent / ".env")
+except ImportError:
+    pass
+# -------------------------------------------------------------------
+
 # =============================================================================
 # ██████  CONFIGURATION - EDIT THIS SECTION ██████
 # =============================================================================
@@ -24,19 +34,19 @@ Author: magicpin AI Challenge Team
 BOT_URL = "http://localhost:8080"
 
 # Choose your LLM provider: "openai", "anthropic", "gemini", "deepseek", "groq", "ollama", "openrouter"
-LLM_PROVIDER = "openai"
+LLM_PROVIDER = "gemini"
 
-# Your API key (paste your key here)
-LLM_API_KEY = ""  # <-- PUT YOUR API KEY HERE
+# Your API key — reads GEMINI_API_KEY (or other provider keys) from .env automatically
+LLM_API_KEY = _os.environ.get("GEMINI_API_KEY", "")
 
-# Model to use (leave empty for default, or specify like "gpt-4o", "claude-3-5-sonnet-20241022", etc.)
-LLM_MODEL = ""  # <-- Optional: specify model or leave empty for default
+# Model to use
+LLM_MODEL = "gemini-3.8-flash"
 
 # For Ollama only: local server URL
 OLLAMA_URL = "http://localhost:11434"
 
 # Which test to run by default
-TEST_SCENARIO = "all"
+TEST_SCENARIO = "phase2_short"
 
 # =============================================================================
 # ██████  END OF CONFIGURATION - DON'T EDIT BELOW THIS LINE ██████
@@ -208,8 +218,8 @@ class AnthropicProvider(LLMProvider):
 
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str, model: str = ""):
-        self.api_key = api_key
-        self.model = model or "gemini-1.5-flash"
+        self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
+        self.model = model or "gemini-2.0-flash"
 
     def name(self) -> str:
         return f"Gemini ({self.model})"
@@ -218,14 +228,23 @@ class GeminiProvider(LLMProvider):
         full_prompt = f"{system}\n\n{prompt}" if system else prompt
         body = json.dumps({
             "contents": [{"parts": [{"text": full_prompt}]}],
-            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1500}
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8000}
         }).encode("utf-8")
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
         req = urlrequest.Request(url, data=body, headers={"Content-Type": "application/json"})
         resp = urlrequest.urlopen(req, timeout=TIMEOUT_LLM)
         data = json.loads(resp.read().decode("utf-8"))
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        try:
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError):
+            # thinking models may surface reasoning in a separate field
+            for candidate in data.get("candidates", []):
+                parts = candidate.get("content", {}).get("parts", [])
+                for part in parts:
+                    if "text" in part:
+                        return part["text"]
+            return ""
 
 
 class DeepSeekProvider(LLMProvider):
@@ -256,7 +275,17 @@ class DeepSeekProvider(LLMProvider):
 class GroqProvider(LLMProvider):
     def __init__(self, api_key: str, model: str = ""):
         self.api_key = api_key
-        self.model = model or "llama-3.1-70b-versatile"
+        self.model = model or "qwen/qwen3.8-27b"
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None:
+            try:
+                from groq import Groq as GroqSDK
+                self._client = GroqSDK(api_key=self.api_key)
+            except ImportError:
+                raise RuntimeError("groq SDK not installed — run: pip install groq")
+        return self._client
 
     def name(self) -> str:
         return f"Groq ({self.model})"
@@ -267,15 +296,14 @@ class GroqProvider(LLMProvider):
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        req = urlrequest.Request(
-            "https://api.groq.com/openai/v1/chat/completions",
-            data=json.dumps({"model": self.model, "messages": messages,
-                            "temperature": 0.2, "max_tokens": 1500}).encode("utf-8"),
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        client = self._get_client()
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=1500
         )
-        resp = urlrequest.urlopen(req, timeout=TIMEOUT_LLM)
-        data = json.loads(resp.read().decode("utf-8"))
-        return data["choices"][0]["message"]["content"]
+        return response.choices[0].message.content or ""
 
 
 class OllamaProvider(LLMProvider):

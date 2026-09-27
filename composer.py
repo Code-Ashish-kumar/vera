@@ -11,7 +11,7 @@ Architecture:
   Internally:
     1. Assemble the 4 contexts from context_store (raw, never pre-cached)
     2. Route trigger.kind → prompt variant
-    3. Call Groq LLM (llama-3.3-70b-versatile, temperature=0)
+    3. Call Gemini LLM (gemini-2.0-flash, temperature=0)
     4. Parse JSON output
     5. Post-LLM validator — reject/retry on: empty body, multiple CTAs,
        URLs present, fabricated numbers, language mismatch
@@ -31,7 +31,7 @@ import re
 import time
 from typing import Any, Optional
 
-from groq import Groq
+import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
 
@@ -39,14 +39,21 @@ logger = logging.getLogger(__name__)
 # LLM CLIENT
 # ---------------------------------------------------------------------------
 
-def _get_groq_client() -> Groq:
-    api_key = os.environ.get("GROQ_API_KEY", "")
+def _get_gemini_client() -> genai.GenerativeModel:
+    api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        raise RuntimeError("GROQ_API_KEY not set — add it to .env")
-    return Groq(api_key=api_key)
+        raise RuntimeError("GEMINI_API_KEY not set — add it to .env")
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel(
+        model_name=GEMINI_MODEL,
+        generation_config=genai.GenerationConfig(
+            temperature=LLM_TEMPERATURE,
+            max_output_tokens=600,
+        ),
+    )
 
 
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 LLM_TEMPERATURE = 0  # required for determinism
 
 # ---------------------------------------------------------------------------
@@ -451,12 +458,12 @@ class LLMComposer:
     """
 
     def __init__(self):
-        self._client: Optional[Groq] = None
+        self._client: Optional[genai.GenerativeModel] = None
 
     @property
-    def client(self) -> Groq:
+    def client(self) -> genai.GenerativeModel:
         if self._client is None:
-            self._client = _get_groq_client()
+            self._client = _get_gemini_client()
         return self._client
 
     def compose(
@@ -484,7 +491,7 @@ class LLMComposer:
             logger.error("Composer ValueError: %s", e, exc_info=True)
             return self._fallback(merchant_id, trigger_id, conv_id, customer_id, context_store)
         except RuntimeError as e:
-            # GROQ_API_KEY not set — return graceful stub
+            # GEMINI_API_KEY not set — return graceful stub
             logger.warning("LLM not configured: %s", e)
             return self._fallback(merchant_id, trigger_id, conv_id, customer_id, context_store)
         except Exception as e:
@@ -653,17 +660,10 @@ Compose the message now. Output ONLY the JSON object, no other text."""
         raise ValueError(f"LLM composition failed after {max_retries + 1} attempts: {last_error}")
 
     def _call_llm(self, user_prompt: str) -> str:
-        """Single Groq API call. Returns raw string content."""
-        response = self.client.chat.completions.create(
-            model=GROQ_MODEL,
-            temperature=LLM_TEMPERATURE,
-            max_tokens=600,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": user_prompt},
-            ],
-        )
-        return response.choices[0].message.content or ""
+        """Single Gemini API call. Returns raw string content."""
+        full_prompt = f"{SYSTEM_PROMPT}\n\n{user_prompt}"
+        response = self.client.generate_content(full_prompt)
+        return response.text or ""
 
     def _parse_json(self, raw: str) -> Optional[dict]:
         """Extract and parse JSON from LLM output. Handles markdown code fences."""

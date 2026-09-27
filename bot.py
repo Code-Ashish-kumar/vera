@@ -13,9 +13,8 @@ Run with Python 3.13:
     py -3.13 -m uvicorn bot:app --host 0.0.0.0 --port 8080 --reload
 
 Configuration (set in .env or environment):
-    GROQ_API_KEY            — required for LLM composition + intent classification
-    GROQ_MODEL              — optional, defaults to llama-3.3-70b-versatile
-    GROQ_CLASSIFIER_MODEL   — optional, defaults to llama-3.1-8b-instant
+    GEMINI_API_KEY          — required for LLM composition + intent classification
+    GEMINI_MODEL            — optional, defaults to gemini-2.0-flash
 """
 
 import asyncio
@@ -28,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-# Load .env before importing composer modules so GROQ_API_KEY is set
+# Load .env before importing composer modules so GEMINI_API_KEY is set
 try:
     from dotenv import load_dotenv
     _env_path = Path(__file__).parent / ".env"
@@ -208,7 +207,7 @@ def _should_force_exit(conv: "ConversationState") -> bool:
 # stub_compose() and stub_reply_compose() have been replaced by:
 #   - composer.py  → LLMComposer (proactive messages from /v1/tick)
 #   - reply_composer.py → LLMReplyComposer (conversation replies from /v1/reply)
-# Both fall back to stub-shaped output if GROQ_API_KEY is not set.
+# Both fall back to stub-shaped output if GEMINI_API_KEY is not set.
 
 # =============================================================================
 # ENDPOINT: GET /v1/healthz
@@ -238,17 +237,17 @@ async def healthz():
 @app.get("/v1/metadata")
 async def metadata():
     """Static bot identity. Update team_name / model before submission."""
-    model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-    raw_key = os.environ.get("GROQ_API_KEY", "")
-    key_set = bool(raw_key) and raw_key != "your_groq_api_key_here"
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    raw_key = os.environ.get("GEMINI_API_KEY", "")
+    key_set = bool(raw_key) and raw_key != "your_gemini_api_key_here"
     return {
         "team_name": "Vera Challenger",
         "team_members": ["Candidate"],
         "model": model,
         "approach": (
-            "4-layer stack: LLM composer (qwen/qwen3.8-27b, 5 trigger-variant families, "
+            "4-layer stack: LLM composer (gemini-2.0-flash, 5 trigger-variant families, "
             "post-LLM validator, few-shot anchors from case studies), "
-            "2-stage intent classifier (Jaccard + LLM 8B), "
+            "2-stage intent classifier (Jaccard + Gemini), "
             "3-step auto-reply escalation, turn-budget enforcer (3 nudges), "
             "adaptive raw-payload context store. temperature=0."
         ),

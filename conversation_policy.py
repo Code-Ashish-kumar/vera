@@ -15,8 +15,8 @@ Replaces the regex-only classifiers in bot.py with a proper two-stage pipeline:
 
   Stage 2 — LLM classifier (called only when Stage 1 returns "ambiguous")
     Single-token output: one of the 7 intent classes.
-    Uses llama-3.1-8b-instant (Groq's smallest/fastest model) —
-    classification is cheap and doesn't need the 70B model's quality.
+    Uses gemini-2.0-flash (fast and capable) —
+    classification is cheap and doesn't need the largest model's quality.
 
   Turn-budget enforcer:
     MAX_NUDGES_BEFORE_EXIT = 3
@@ -40,7 +40,7 @@ import os
 import re
 from typing import Optional
 
-from groq import Groq
+import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +48,8 @@ logger = logging.getLogger(__name__)
 # CONFIG
 # ---------------------------------------------------------------------------
 
-# Groq's fast 8B model — enough for single-token classification, much faster
-# than 70B. Falls back gracefully if not available.
-CLASSIFIER_MODEL = os.environ.get("GROQ_CLASSIFIER_MODEL", "llama-3.1-8b-instant")
+# Gemini model for classification — fast and cheap
+CLASSIFIER_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 LLM_TEMPERATURE  = 0
 
 # Jaccard similarity threshold for near-duplicate auto-reply detection
@@ -251,16 +250,23 @@ RULES:
 - If message is a question AND an accept (e.g., "Yes, when can you send it?"), choose accept.
 """
 
-_groq_classifier_client: Optional[Groq] = None
+_gemini_classifier_client: Optional[genai.GenerativeModel] = None
 
-def _get_classifier_client() -> Groq:
-    global _groq_classifier_client
-    if _groq_classifier_client is None:
-        api_key = os.environ.get("GROQ_API_KEY", "")
-        if not api_key or api_key == "your_groq_api_key_here":
-            raise RuntimeError("GROQ_API_KEY not set")
-        _groq_classifier_client = Groq(api_key=api_key)
-    return _groq_classifier_client
+def _get_classifier_client() -> genai.GenerativeModel:
+    global _gemini_classifier_client
+    if _gemini_classifier_client is None:
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+        if not api_key or api_key == "your_gemini_api_key_here":
+            raise RuntimeError("GEMINI_API_KEY not set")
+        genai.configure(api_key=api_key)
+        _gemini_classifier_client = genai.GenerativeModel(
+            model_name=CLASSIFIER_MODEL,
+            generation_config=genai.GenerationConfig(
+                temperature=LLM_TEMPERATURE,
+                max_output_tokens=10,
+            ),
+        )
+    return _gemini_classifier_client
 
 
 _VALID_INTENTS = frozenset(
@@ -280,16 +286,9 @@ def classify_llm(message: str, conversation_context: str = "") -> str:
         if conversation_context:
             user_content = f"[Context: {conversation_context[:300]}]\n\nMessage: {message}"
 
-        response = client.chat.completions.create(
-            model=CLASSIFIER_MODEL,
-            temperature=LLM_TEMPERATURE,
-            max_tokens=10,   # single word only
-            messages=[
-                {"role": "system", "content": _CLASSIFIER_SYSTEM},
-                {"role": "user",   "content": user_content},
-            ],
-        )
-        raw = (response.choices[0].message.content or "").strip().lower()
+        full_prompt = f"{_CLASSIFIER_SYSTEM}\n\n{user_content}"
+        response = client.generate_content(full_prompt)
+        raw = (response.text or "").strip().lower()
         # Extract first word in case model adds punctuation
         word = re.split(r"\W+", raw)[0] if raw else ""
         if word in _VALID_INTENTS:

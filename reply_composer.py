@@ -20,7 +20,7 @@ import os
 import re
 from typing import Any, Optional
 
-from groq import Groq
+import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +28,21 @@ logger = logging.getLogger(__name__)
 # RE-USE THE SAME CLIENT CONFIG AS composer.py
 # ---------------------------------------------------------------------------
 
-GROQ_MODEL   = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GEMINI_MODEL    = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 LLM_TEMPERATURE = 0
 
-def _get_groq_client() -> Groq:
-    api_key = os.environ.get("GROQ_API_KEY", "")
+def _get_gemini_client() -> genai.GenerativeModel:
+    api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        raise RuntimeError("GROQ_API_KEY not set")
-    return Groq(api_key=api_key)
+        raise RuntimeError("GEMINI_API_KEY not set")
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel(
+        model_name=GEMINI_MODEL,
+        generation_config=genai.GenerationConfig(
+            temperature=LLM_TEMPERATURE,
+            max_output_tokens=400,
+        ),
+    )
 
 # ---------------------------------------------------------------------------
 # SYSTEM PROMPT FOR REPLY COMPOSER
@@ -253,12 +260,12 @@ class LLMReplyComposer:
     """
 
     def __init__(self):
-        self._client: Optional[Groq] = None
+        self._client: Optional[genai.GenerativeModel] = None
 
     @property
-    def client(self) -> Groq:
+    def client(self) -> genai.GenerativeModel:
         if self._client is None:
-            self._client = _get_groq_client()
+            self._client = _get_gemini_client()
         return self._client
 
     def compose_reply(
@@ -325,16 +332,9 @@ class LLMReplyComposer:
             context_store, message, intent
         )
 
-        response = self.client.chat.completions.create(
-            model=GROQ_MODEL,
-            temperature=LLM_TEMPERATURE,
-            max_tokens=400,
-            messages=[
-                {"role": "system", "content": REPLY_SYSTEM_PROMPT},
-                {"role": "user",   "content": context_block},
-            ],
-        )
-        raw = response.choices[0].message.content or ""
+        full_prompt = f"{REPLY_SYSTEM_PROMPT}\n\n{context_block}"
+        response = self.client.generate_content(full_prompt)
+        raw = response.text or ""
         result = self._parse_json(raw)
 
         if result is None:

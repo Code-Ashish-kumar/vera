@@ -10,7 +10,7 @@ Output:
 
 Design rules (from execution plan Step 6):
   - Uses the SAME composer.py code path as the deployed bot (not a standalone script).
-  - Loads .env before importing composer so GROQ_API_KEY is set identically.
+  - Loads .env before importing composer so GEMINI_API_KEY is set identically.
   - Reads all 4 contexts from dataset/expanded/ — the same files the judge will use.
   - Calls composer.compose() with a real context_store dict, exactly as bot.py tick does.
   - Falls back to stub for any pair where composition fails, logs the failure, and
